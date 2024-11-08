@@ -7,7 +7,7 @@ import h5py
 from astropy.table import Table, vstack
 
 import sys
-sys.path.append('..')
+sys.path.append('/global/homes/j/jpiat/my_hodpy/')
 from hodpy import lookup
 from hodpy.cosmology import CosmologyAbacus
 from hodpy.hod_bgs_abacus import HOD_BGS
@@ -24,7 +24,7 @@ from hodpy.colour import ColourDESI
 
 ### For converting cartesian coordinates to a cut-sky mock
 
-def cut_sky(gal_cat, photsys, hod, Lbox=2000., replication=(0,0,0), zcut=None, mag_cut=None, z0=0.2):
+def cut_sky(gal_cat, cosmo, Lbox=2000., replication=(0,0,0), zcut=None, mag_cut=None, z0=0.2):
     """
     Creates a cut sky mock by converting the cartesian coordiantes of a cubic box mock to ra, dec, z.
     Magnitudes and colours are evolved with redshift
@@ -61,7 +61,7 @@ def cut_sky(gal_cat, photsys, hod, Lbox=2000., replication=(0,0,0), zcut=None, m
     
     gal_cat['index'] = np.arange(len(gal_cat['x']), dtype=np.int64)
     
-    cosmology = hod.cosmo
+    cosmology = CosmologyAbacus(cosmo)
     cat = Catalogue(cosmology) # use this for converting coordinates to ra, dec, z
     
     position_rep = np.array([gal_cat['x'], gal_cat['y'], gal_cat['z']]).transpose()
@@ -91,31 +91,56 @@ def cut_sky(gal_cat, photsys, hod, Lbox=2000., replication=(0,0,0), zcut=None, m
         print("Applying redshift cut z < %.2f"%zcut)
         keep = gal_cat['Z'] <= zcut
         gal_cat = gal_cat[keep]
+        
+
+    # assigning absolute magnitude according to position
+    NGC = gal_cat['DEC']>32.375
+    SGC = gal_cat['DEC']<=32.375
+    
+    gal_cat['R_MAG_ABS'] = np.zeros(len(gal_cat['DEC']))
+    gal_cat['R_MAG_ABS'][NGC] = gal_cat['R_MAG_ABS_N'][NGC]
+    gal_cat['R_MAG_ABS'][SGC] = gal_cat['R_MAG_ABS_S'][SGC]
                   
     
+    # assigning colours
     print("Assigning colours")
     is_cen = gal_cat['cen']==1
     is_sat = gal_cat['cen']==0
     colour_new = np.zeros(len(is_cen))
     
-    col = ColourDESI(photsys=photsys, hod=hod, cutsky=True, cutsky_z0=z0)
+    gal_cat['R_MAG_APP'] = np.zeros(len(gal_cat['R_MAG_ABS']))
+    gal_cat['G_R_REST'] = np.zeros(len(gal_cat['R_MAG_ABS']))
+    gal_cat['G_R_OBS'] = np.zeros(len(gal_cat['R_MAG_ABS']))
     
-    # randomly assign colours to centrals and satellites
-    colour_new[is_cen] = col.get_central_colour(gal_cat['R_MAG_ABS'][is_cen], gal_cat['Z'][is_cen])
-    colour_new[is_sat] = col.get_satellite_colour(gal_cat['R_MAG_ABS'][is_sat], gal_cat['Z'][is_sat])
-    gal_cat['G_R_REST'] = colour_new
+    for photsys in ["N","S"]:
+        
+        if photsys == "N":
+            keep = NGC
+        else:
+            keep = SGC
+
+        hod = HOD_BGS(cosmo, photsys=photsys, mag_faint_type='absolute', mag_faint=-10, redshift_evolution=False,
+                  replace_central_lookup=True, replace_satellite_lookup=True)
+        
+        col = ColourDESI(photsys=photsys, hod=hod, cutsky=True, cutsky_z0=z0)
     
-    # get apparent magnitude
-    kcorr_r = DESI_KCorrection(band='r', photsys=photsys, cosmology=cosmology) 
-    gal_cat['R_MAG_APP'] = kcorr_r.apparent_magnitude(gal_cat['R_MAG_ABS'], gal_cat['Z'], gal_cat['G_R_REST'])
+        # randomly assign colours to centrals and satellites
+        colour_new[is_cen] = col.get_central_colour(gal_cat[f'R_MAG_ABS_{photsys}'][is_cen], gal_cat['Z'][is_cen])
+        colour_new[is_sat] = col.get_satellite_colour(gal_cat[f'R_MAG_ABS_{photsys}'][is_sat], gal_cat['Z'][is_sat])
+        gal_cat['G_R_REST'][keep] = colour_new[keep]
+    
+        # get apparent magnitude
+        kcorr_r = DESI_KCorrection(band='r', photsys=photsys, cosmology=cosmology) 
+        gal_cat['R_MAG_APP'][keep] = kcorr_r.apparent_magnitude(gal_cat['R_MAG_ABS'][keep], gal_cat['Z'][keep], gal_cat['G_R_REST'][keep])
+    
+        # observer frame colours
+        kcorr_col = DESI_KCorrection_color(photsys=photsys)
+        gal_cat['G_R_OBS'][keep] = kcorr_col.observer_frame_colour(gal_cat['Z'][keep], np.clip(gal_cat['G_R_REST'][keep],-3.9,3.9))
+    
     
     if len(gal_cat['Z']) > 0:
-        print(np.min(gal_cat['Z']), np.max(gal_cat['Z']))
-        print(np.min(gal_cat['G_R_REST']), np.max(gal_cat['G_R_REST']))
-    
-    # observer frame colours
-    kcorr_col = DESI_KCorrection_color(photsys=photsys)
-    gal_cat['G_R_OBS'] = kcorr_col.observer_frame_colour(gal_cat['Z'], np.clip(gal_cat['G_R_REST'],-3.9,3.9))
+            print(np.min(gal_cat['Z']), np.max(gal_cat['Z']))
+            print(np.min(gal_cat['G_R_REST']), np.max(gal_cat['G_R_REST']))
     
     if not mag_cut is None:
         print("Applying magnitude cut r < %.2f"%mag_cut)
@@ -458,7 +483,7 @@ def get_min_mass(rfaint, photsys, hod, cosmology, zsnap=0.2):
 
 
 
-def main_unresolved(input_file, output_file, cosmo, photsys, snapshot_redshift=0.2, mag_faint=-12, 
+def main_unresolved(input_file, output_file, cosmo, snapshot_redshift=0.2, mag_faint=-12, 
                     box_size=2000., SODensity=200,
                     zmax=0.6, log_mass_min=None, log_mass_max=None):
     """
@@ -534,35 +559,45 @@ def main_unresolved(input_file, output_file, cosmo, photsys, snapshot_redshift=0
     file_number = int(input_file[-8:-5])
     halo_id = np.arange(len(halo_cat.get("zcos")),dtype=np.int64) + (file_number*-1e10)
     halo_cat.add('id', halo_id)
-    
-    # use hods to populate galaxy catalogue
-    print("read HODs")
-    replace_lookup = file_number==0
-    hod = HOD_BGS(cosmo, photsys=photsys, mag_faint_type='absolute', mag_faint=mag_faint, redshift_evolution=False,
-                 replace_central_lookup=replace_lookup, replace_satellite_lookup=replace_lookup)
-    
+                                
     # empty galaxy catalogue
     print("create galaxy catalogue")
     gal_cat  = BGSGalaxyCatalogueSnapshotAbacus(halo_cat, cosmo)
     
-    print("add galaxies")
-    gal_cat.add_galaxies(hod)
-
+    # use hods to populate galaxy catalogue
+    for photsys in ["N", "S"]:
+        
+        print("read HODs")
+        replace_lookup = file_number==0
+        hod = HOD_BGS(cosmo, photsys=photsys, mag_faint_type='absolute', mag_faint=mag_faint, redshift_evolution=False, 
+                      replace_central_lookup=replace_lookup, replace_satellite_lookup=replace_lookup)
+        
+        print("add galaxies")
+        if photsys == "N":
+            num_sat = gal_cat.add_galaxies(hod)
+        elif photsys == "S":
+            _ = gal_cat.add_galaxies(hod,num_sat=num_sat)
+        
     # position galaxies around their haloes
     print("position galaxies")
     gal_cat.position_galaxies(conc="conc")
-
+        
     # add g-r colours
-    print("assigning g-r colours")
-    col = ColourDESI(photsys=photsys, hod=hod)
-    gal_cat.add_colours(col)
+    for photsys in ["N", "S"]:
+        
+        hod = HOD_BGS(cosmo, photsys=photsys, mag_faint_type='absolute', mag_faint=mag_faint, redshift_evolution=False, 
+                      replace_central_lookup=False, replace_satellite_lookup=False)
+        
+        col = ColourDESI(photsys=photsys, hod=hod)
+        gal_cat.add_colours(col)
+    
 
     gal_cat.save_to_file(output_file, format="fits_BGS")
 
 
 
 def make_lightcone_lowz(resolved_file, unresolved_file, output_file, 
-                        hod, photsys, mag_faint, snapshot_redshift=0.2, box_size=2000., 
+                        cosmo, mag_faint, snapshot_redshift=0.2, box_size=2000., 
                         zmax=0.15):
     """
     Create a cut-sky mock (with ra, dec, z), from the cubic box galaxy mock,
@@ -599,14 +634,14 @@ def make_lightcone_lowz(resolved_file, unresolved_file, output_file,
     
     cat['box_ind'] = np.ones(len(cat['x']), dtype="i")*-1
     
-    cat = cut_sky(cat, photsys, hod, Lbox=box_size, replication=(0,0,0), zcut=zmax, mag_cut=mag_faint)
+    cat = cut_sky(cat, cosmo, Lbox=box_size, replication=(0,0,0), zcut=zmax, mag_cut=mag_faint)
     
     cat.write(output_file, format="fits")
 
 
 
 
-def make_lightcone(input_file, output_file, hod, photsys, mag_faint, snapshot_redshift=0.2, box_size=2000., observer=(0,0,0), zmax=0.6):
+def make_lightcone(input_file, output_file, cosmo, mag_faint, snapshot_redshift=0.2, box_size=2000., observer=(0,0,0), zmax=0.6):
     """
     Create a cut-sky mock (with ra, dec, z), from the cubic box galaxy mock,
     also rescaling magnitudes by cosmology if the original cosmology is provided
@@ -644,7 +679,7 @@ def make_lightcone(input_file, output_file, hod, photsys, mag_faint, snapshot_re
     print(np.min(cat['z']), np.max(cat['z']))
     
     # get distance corresponding to zmax - needed to find which periodic replications we can skip
-    cosmology = hod.cosmo
+    cosmology = CosmologyAbacus(cosmo)
     rmax = cosmology.comoving_distance(zmax)
     
     print(zmax, rmax)
@@ -668,7 +703,7 @@ def make_lightcone(input_file, output_file, hod, photsys, mag_faint, snapshot_re
                 
                 print('Replication (%i,%i,%i)'%(i,j,k))
     
-                cat_new = cut_sky(cat, photsys, hod, Lbox=box_size, replication=(i,j,k), zcut=zmax, mag_cut=mag_faint, z0=snapshot_redshift)
+                cat_new = cut_sky(cat, cosmo, Lbox=box_size, replication=(i,j,k), zcut=zmax, mag_cut=mag_faint, z0=snapshot_redshift)
     
                 print("Number of galaxies:", np.count_nonzero(cat_new['RA']))
 
@@ -715,6 +750,75 @@ def join_files(galaxy_cutsky, galaxy_cutsky_low, output_file, zmax_low=0.15, zma
         
         table = vstack([table, table_i, table_j])
         del table_j
+        
+    
+    # make new table with column names consistent with the previous version of the mock
+    table_new = Table()
+    table_new['R_MAG_APP'] = np.array(table['R_MAG_APP'], dtype=np.float32)
+    table_new['R_MAG_ABS'] = np.array(table['R_MAG_ABS'], dtype=np.float32)
+    table_new['G_R_REST']  = np.array(table['G_R_REST'],   dtype=np.float32)
+    table_new['G_R_OBS']   = np.array(table['G_R_OBS'],   dtype=np.float32)
+    table_new['DEC']       = np.array(table['DEC'],       dtype=np.float32)
+    table_new['HALO_MASS'] = np.array(table['HALO_MASS'], dtype=np.float32)
+    table_new['CEN']       = np.array(table['cen'],       dtype=np.int32)
+    table_new['RES']       = np.array(table['res'],       dtype=np.int32)
+    table_new['RA']        = np.array(table['RA'],        dtype=np.float32)
+    table_new['Z_COSMO']   = np.array(table['Z_COSMO'],   dtype=np.float32)
+    table_new['Z']         = np.array(table['Z'],         dtype=np.float32)
+    table_new['FILE_NUM']  = np.array(table['FILE_NUM'],  dtype=np.int32)
+    
+    unres = table_new['RES']==0
+    halo_id = np.array(table['HALO_ID'], dtype=np.int64)
+    halo_id[unres]=-1
+    table_new['HALO_ID']   = halo_id
+    
+    box_index = np.array(table['box_ind'], dtype=np.int32)
+    box_index[unres]=-1
+    table_new['BOX_INDEX'] = box_index
+    
+    table_new['x_box'] = np.array(table['x'],     dtype=np.float32)
+    table_new['y_box'] = np.array(table['y'],     dtype=np.float32)
+    table_new['z_box'] = np.array(table['z'],     dtype=np.float32)
+    table_new['x_rep'] = np.array(table['x_rep'], dtype=np.float32)
+    table_new['y_rep'] = np.array(table['y_rep'], dtype=np.float32)
+    table_new['z_rep'] = np.array(table['z_rep'], dtype=np.float32)
+    table_new['vx']    = np.array(table['vx'],    dtype=np.float32)
+    table_new['vy']    = np.array(table['vy'],    dtype=np.float32)
+    table_new['vz']    = np.array(table['vz'],    dtype=np.float32)
+    
+    # write the new table
+    table_new.write(output_file, format="fits")
+    
+    
+
+    
+def join_files(galaxy_cutsky, output_file, zmax_low=0.15, zmax=0.6, app_mag_faint=20.2):
+    '''
+    Combine the cut-sky outputs into a single file
+    '''
+    
+    table = Table()
+    
+    for file_number in range(34):
+        print(file_number)
+
+        table_i = Table()
+        
+        #loop through the periodic replications
+        for i in range(-5,6):
+            for j in range(-5,6):
+                for k in range(-5,6):
+                    
+                    try:
+                        table_i_rep = Table.read((galaxy_cutsky%file_number)[:-5]+'_rep%i%i%i.fits'%(i,j,k))
+                        table_i = vstack([table_i, table_i_rep])
+                        del table_i_rep
+                    except:
+                        continue
+                        
+        table_i['FILE_NUM'][:] = file_number
+        keep = np.logical_and.reduce((table_i['Z'] >= zmax_low, table_i['Z'] <= zmax, table_i['R_MAG_APP']<=app_mag_faint))
+        table_i = table_i[keep]
         
     
     # make new table with column names consistent with the previous version of the mock
