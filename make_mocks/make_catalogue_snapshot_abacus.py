@@ -3,6 +3,9 @@ from __future__ import print_function
 import numpy as np
 from astropy.table import Table, vstack
 
+import sys
+sys.path.append('/global/homes/j/jpiat/hodpy/')
+
 from hodpy.halo_catalogue import AbacusSnapshot
 from hodpy.galaxy_catalogue_snapshot import BGSGalaxyCatalogueSnapshotAbacus
 from hodpy.hod_bgs_abacus import HOD_BGS
@@ -127,8 +130,8 @@ if __name__ == "__main__":
 
     # location of the snapshots on NERSC
     abacus_path = '/global/cfs/cdirs/desi/cosmosim/Abacus/AbacusSummit_base_c%03d_ph%03d/halos/z%.3f/'%(cosmo,phase,snapshot_redshift)
-    
-    output_path = '/pscratch/sd/a/amjsmith/AbacusSummit/secondgen_new/z%.3f/AbacusSummit_base_c%03d_ph%03d/'%(snapshot_redshift,cosmo,phase)
+
+    output_path = '/pscratch/sd/j/jpiat/Abacus_mocks/z%.3f/AbacusSummit_base_c%03d_ph%03d/cubic_box/wsys/%s/'%(snapshot_redshift,cosmo,phase,photsys)
     
     # each snapshot is split into 34 files
     for file_number in range(34):

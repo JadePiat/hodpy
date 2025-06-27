@@ -192,7 +192,7 @@ class DESI_KCorrection(object):
         return  self.k(redshift, restframe_colour) - self.k(refzs, restframe_colour) - 2.5 * np.log10(1. + refz)
 
     
-    def apparent_magnitude(self, absolute_magnitude, redshift, colour, use_ecorr=True, Q=lookup.Q, zq=lookup.zq):
+    def apparent_magnitude(self, absolute_magnitude, redshift_cosmo, redshift, colour, use_ecorr=True, use_conv=True, Q=lookup.Q, zq=lookup.zq,c=3e5):
         """
         Convert absolute magnitude to apparent magnitude
 
@@ -210,7 +210,10 @@ class DESI_KCorrection(object):
             raise RuntimeError("Cosmology has not been set. Use the set_cosmology method")
         
         # Luminosity distance
-        D_L = (1.+redshift) * self.cosmo.comoving_distance(redshift)
+        if use_conv:
+            D_L = (1.+redshift)**2/(1.+redshift_cosmo) * self.cosmo.comoving_distance(redshift_cosmo)
+        else:
+            D_L = (1.+redshift) * self.cosmo.comoving_distance(redshift)
 
         if use_ecorr:
             E = Q * (redshift - zq)
