@@ -48,6 +48,8 @@ class GalaxyCatalogueSnapshot(GalaxyCatalogue):
     def _get_velocities(self):
         # gets random velocity vector of each galaxy
 
+        is_sat = self.get("is_sat")
+
         # velocity of halo
         vel_halo = self.get_halo("vel")
 
@@ -58,7 +60,7 @@ class GalaxyCatalogueSnapshot(GalaxyCatalogue):
         # random velocity along each axis
         vel_rel = np.zeros(vel_halo.shape)
         for i in range(3):
-            vel_rel[:,i] = vel_disp*np.random.normal(loc=0.0, scale=1.0, 
+            vel_rel[is_sat,i] = vel_disp*np.random.normal(loc=0.0, scale=1.0, 
                                                      size=self.size)
 
         return vel_halo + vel_rel
